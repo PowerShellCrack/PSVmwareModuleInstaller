@@ -9,161 +9,21 @@
 #>
 [CmdletBinding()]
 Param (
-	[Parameter(Mandatory=$false,Position=0,HelpMessage='Specify modules to install. for multiple, separate by commas')]
+	[Parameter(Mandatory=$false,Position=0,HelpMessage='Specify modules to install. for multiple, separate by commas, for all type All or do not specify')]
 	[string[]]$InstallModules,
-    [Parameter(Mandatory=$false,Position=1,HelpMessage='Decide what to do it older modules are found')]
-    [ValidateSet("Remove","Uninstall","Delete","Ignore")]
-	[string]$FoundAction = 'Delete',
     [Parameter(Mandatory=$false,Position=1,HelpMessage='Where to load the modules. CurrentLocation = Default: Load from script modules directory; 
                                                                                    UserModulePath = Copy module to user PSModulePath;
                                                                                    SystemModulePath = Copy module to Program Files Directory')]
 	[ValidateSet("CurrentLocation","UserModulePath","SystemModulePath")]
-    [string] $LoadPath = 'CurrentLocation'
+    [string] $SkopePath = 'CurrentLocation'
 )
+
 
 ##*=============================================
 ##* FUNCTIONS
 ##*=============================================
-Function Parse-Psd1{
-    [CmdletBinding()]
-    Param (
-        [Parameter(Mandatory=$false)]
-        [Microsoft.PowerShell.DesiredStateConfiguration.ArgumentToConfigurationDataTransformationAttribute()]
-        [hashtable] $data
-    ) 
-    return $data
-}
 
-function ReportStartOfActivity($activity) {
-   $script:currentActivity = $activity
-   Write-Progress -Activity $loadingActivity -CurrentOperation $script:currentActivity -PercentComplete $script:percentComplete
-}
 
-function ReportFinishedActivity() {
-   $script:completedActivities++
-   $script:percentComplete = (100.0 / $totalActivities) * $script:completedActivities
-   $script:percentComplete = [Math]::Min(99, $percentComplete)
-   
-   Write-Progress -Activity $loadingActivity -CurrentOperation $script:currentActivity -PercentComplete $script:percentComplete
-}
-
-# Load modules
-function Load-DependencyModules(){
-    [CmdletBinding()]
-    Param (
-        [Parameter(Mandatory=$true)]
-        $ModuleName
-    )
-    ReportStartOfActivity "Searching for $productShortName module components..."
-
-   
-
-   $loaded = Get-Module -Name $ModuleName -ErrorAction Ignore | % {$_.Name}
-   $registered = Get-Module -Name $ModuleName -ListAvailable -ErrorAction Ignore | % {$_.Name}
-   $notLoaded = $null
-   $notLoaded = $registered | ? {$loaded -notcontains $_}
-   
-   ReportFinishedActivity
-   
-   foreach ($module in $registered) {
-      if ($loaded -notcontains $module) {
-		 ReportStartOfActivity "Loading module $module"
-         
-		 #Import-Module $module
-		 Write-Host $module
-		 ReportFinishedActivity
-      }
-   }
-}
-
-Function Collect-Modules{
-    [CmdletBinding()]
-    Param (
-        [Parameter(Mandatory=$true,HelpMessage='Please enter the path to the psd1 manifest file')]
-		#[ValidateScript({('.psd1' -contains [IO.Path]::GetExtension($_))})]
-		[Alias('FilePath')]
-		[string]$ModulePath,
-        [Parameter(Mandatory=$false)]
-        [string]$SearchPath,
-        [Parameter(Mandatory=$false)]
-        [string]$NotVersion,
-        [Parameter(Mandatory=$false)]
-        [switch]$AppendObject,
-        [Parameter(Mandatory=$false)]
-        [boolean]$ReturnObject = $true,
-        [Parameter(Mandatory=$false)]
-        [switch]$GetDependencies = $true,
-        [Parameter(Mandatory=$true)]
-        [string]$WhereID
-
-    )
-    Begin{
-        If($SearchPath){
-            If($NotVersion){
-                $FoundManifest = Get-ChildItem $ModulePath -Filter *.psd1 -Depth 1 | Where-Object {$_.FullName -notmatch "$NotVersion"}
-            }
-            Else{
-                $FoundManifest = Get-ChildItem $ModulePath -Filter *.psd1 -Depth 1
-            }
-        }
-        Else{
-            If($NotVersion){
-                $FoundManifest = Get-ChildItem $ModulePath -Filter *.psd1 -Depth 1 | Where-Object {$_.FullName -notmatch "$NotVersion"}
-            }
-            Else{
-                $FoundManifest = Get-ChildItem $ModulePath -Filter *.psd1 -Depth 1
-            }
-        }
-    }
-    Process{
-        $ModuleObject = @()
-        If($FoundManifest){
-            $FoundManifest | ForEach{
-                $Manifest = Test-ModuleManifest $_.FullName -ErrorAction Ignore
-                $Name = Split-Path ("$ModulePath\" + $_.Name) -Leaf
-                $FullPath = "$ModulePath\" + $_.BaseName + "\"+ $Manifest.Version
-
-                If($GetDependencies){
-                    #clear list, build collection object
-                    $DependencyList = @()
-                    $DependencyList = New-Object System.Collections.Generic.List[System.Object]
-                    $Manifest.RequiredModules | ForEach{
-                        #find modules psd1 file
-                        $RequiredModulesDir = Get-ChildItem ("$UserModulePath\$Module\" + $_.Name + "\" + $_.Version) -Filter *.psd1 -Depth 1
-                        If($RequiredModulesDir){
-                            $DependencyList.Add($RequiredModulesDir.DirectoryName)
-                        }
-                    
-                    }
-                }
-                Else{$Dependencies = 'Excluded'}
-                
-                $ModuleObject += new-object psobject -property @{
-                    Name=$_.BaseName
-                    Version=$Manifest.Version
-                    FullPath=$FullPath
-                    DependencyPath=$DependencyList
-                    Where=$WhereID
-                }
-
-            }
-        }
-        Else{
-            Write-Host "No Modules found or invalid path [$ModulePath]" -ForegroundColor Yellow
-        }
-    }
-    End{
-        If($FoundManifest){
-            Write-Host "Global Object is named [Global:ModuleCollection]"
-            If($AppendObject){$Global:ModuleCollection += $ModuleObject}
-            Else{$Global:ModuleCollection = $ModuleObject}
-        
-            If($ReturnObject -eq $true){return $Global:ModuleCollection}
-            Else{return $true}
-        }
-        Else{return $false}
-    }
-}
 ##*===============================================
 ##* VARIABLE DECLARATION
 ##*===============================================
@@ -173,10 +33,20 @@ Function Collect-Modules{
 [string]$scriptFileName = Split-Path -Path $scriptPath -Leaf
 [string]$scriptRoot = Split-Path -Path $scriptPath -Parent
 [string]$invokingScript = (Get-Variable -Name 'MyInvocation').Value.ScriptName
+#  Get the invoking script directory
+If ($invokingScript) {
+	#  If this script was invoked by another script
+	[string]$scriptParentPath = Split-Path -Path $invokingScript -Parent
+}
+Else {
+	#  If this script was not invoked by another script, fall back to the directory one level above this script
+	[string]$scriptParentPath = (Get-Item -LiteralPath $scriptRoot).Parent.FullName
+}
 
-#Get required folder and File paths
+#Get relative folder and File paths
 [string]$ModulesPath = Join-Path -Path $scriptRoot -ChildPath 'Modules'
 [string]$BinPath = Join-Path -Path $scriptRoot -ChildPath 'Bin'
+[string]$ScriptsPath = Join-Path -Path $scriptRoot -ChildPath 'Scripts'
 
 #Get all paths to PowerShell Modules
 $UserModulePath = $env:PSModulePath -split ';' | Where {$_ -like "$home*"}
@@ -198,6 +68,94 @@ If($NuGetAssemblySourcePath){
         Copy-Item -Path $NuGetAssemblySourcePath.FullName -Destination $NuGetAssemblyDestPath –Recurse -ErrorAction SilentlyContinue
     }
 }
+
+
+# Get Modules in modules folder and whats installed
+If ($InstallModules){
+    $query = $InstallModules
+    $AlreadyInstalledModules = Get-Module -Name $InstallModules -ListAvailable
+}
+Else{
+    $query = '(\d+\.)(\d+\.)(\d+\.)(\d)' #Regex filter for 4 digit version number (eg: 1.0.0.1)
+    $AlreadyInstalledModules = Get-Module -ListAvailable
+}
+$Modules = Get-ChildItem -Path $ModulesPath -Recurse | Where-Object { $_.Name -match $query} | % {Get-ChildItem -Path $_.FullName -Filter *.psd1}
+
+
+
+# Collect Modules with dependecies
+$ModuleObject = @()
+foreach($module in $modules)
+{
+    "Collecting manifest information for module: {0}" -f $module.BaseName | Write-Host -ForegroundColor Cyan
+    $Manifest = Test-ModuleManifest $module.FullName -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+
+    #clear list, build collection object
+    $Dependencies = @()
+    $Dependencies = New-Object System.Collections.Generic.List[System.Object]
+
+    #parse all required modules from manifest
+    If($Manifest.RequiredModules)
+    {
+        ForEach($RequiredModule in $Manifest.RequiredModules)
+        {
+            If($Manifest.RequiredModules.Count -eq 1){"Found {1} dependency for module: {0}" -f $Module.BaseName, $Manifest.RequiredModules.Count | Write-Host -ForegroundColor Gray}
+            If($Manifest.RequiredModules.Count -gt 1){"Found {1} dependencies for module: {0}" -f $Module.BaseName, $Manifest.RequiredModules.Count | Write-Host -ForegroundColor Gray}
+
+            "Collecting module dependency details on: {0}" -f $RequiredModule.Name | Write-Host -ForegroundColor DarkCyan
+            $RequiredModuleDir = Get-ChildItem -Path $ModulesPath -Filter *.psd1 -Recurse | Where {$_.BaseName -eq $RequiredModule.Name} | Select -First 1
+            
+            #if Module is found
+            If($RequiredModuleDir){
+                [string]$RequiredModuleVersion = (Test-ModuleManifest $RequiredModuleDir -ErrorAction SilentlyContinue).Version
+                $RootPath = Split-Path $RequiredModuleDir.Directory -Resolve
+
+                #If there is a dependencies add its path to an collection
+                If($RequiredModuleDir){
+                    $Dependencies.Add($RequiredModuleDir.FullName)
+                    #$Dependencies.Add($RootPath)
+                }
+            }
+            Else{
+                "Missing [{1}] dependency for module: {0}" -f $Module.BaseName, $Manifest.RequiredModules | Write-Host -ForegroundColor Gray
+            }
+            
+        }
+        [int32]$DependenciesCount = $Dependencies.Count
+    }
+    Else{
+        "No dependencies found for module: {0}" -f $Module.BaseName | Write-Host -ForegroundColor Gray
+        [int32]$DependenciesCount = 0
+    }
+
+    # Build an object that consists of module dependecy information 
+    $ModuleObject += new-object psobject -property @{
+        ModuleName=$module.BaseName
+        ModuleVersion=$Manifest.Version.ToString()
+        ModuleFolder=$module.DirectoryName
+        ModulePath=$module.FullName
+        ModuleSkope=$SkopePath
+        DependencyPath=$Dependencies
+        DependencyCount=$DependenciesCount
+    }
+
+
+    #get the max amount of dependecies to determine install loop 
+    #------------------------------------------------------------
+    $MaxDependencies = $ModuleObject.DependencyCount | Measure-Object -Maximum
+}
+
+
+
+
+
+
+
+
+
+
+
+
 
 #build User Powershell profile directory
 #https://blogs.technet.microsoft.com/heyscriptingguy/2012/05/21/understanding-the-six-powershell-profiles/
