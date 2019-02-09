@@ -1,4 +1,6 @@
 # OfflineModuleInstaller
+
+** WORK IN PROGRESS **
 Saves and Installs module offline. Resolved dependencies on diconnected networks. 
 
 
